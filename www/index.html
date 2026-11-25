@@ -50,7 +50,7 @@ const hash=async s=>[...new Uint8Array(await crypto.subtle.digest('SHA-256',new 
 let S;try{S=JSON.parse(localStorage.getItem('tsr_db'))}catch(e){}
 S=S||{cats:['أقلام الخط العربي','السلاسات','الأحبار','الورق','أدوات ومستلزمات الخط','إكسسوارات الخطاطين'],products:[],sales:[],moves:[],suppliers:[],purchases:[],seq:1,
 set:{name:'مداد الجوهرة',phone:'',vat:'',tax:15,logo:null},users:[{id:'u1',name:'المدير',user:'admin',pass:'03ac674216f3e15c761ee1a5e255f067953623c8b388b4459e13f978d7c846f4',role:'owner'}]};
-let saveErr=false;const save=()=>{try{localStorage.setItem('tsr_db',JSON.stringify(S))}catch(e){toast('تعذّر الحفظ: المساحة ممتلئة. احذف صوراً أو خذ نسخة احتياطية','e')}};
+let saveErr=false;const save=()=>{try{localStorage.setItem('tsr_db',JSON.stringify(S))}catch(e){toast('تعذّر الحفظ: المساحة ممتلئة. احذف صوراً أو خذ نسخة احتياطية','e')}if(window.cloudSave)window.cloudSave(S)};
 let me=null;try{me=S.users.find(u=>u.id===sessionStorage.getItem('tsr_me'))||null}catch(e){}
 const ui={v:'home',q:'',cat:'',cart:[],disc:0,pay:'نقدي',range:'month',from:'',to:'',img:null};
 const TABS=[['home','الرئيسية','⌂'],['sell','بيع','◈'],['products','المنتجات','▤'],['stock','الجرد','☰'],['buy','المشتريات','⇩'],['rep','التقارير','◔'],['set','الإعدادات','⚙']];
@@ -214,4 +214,42 @@ document.addEventListener('keydown',e=>{if(e.key==='Enter'&&e.target.dataset.in=
 document.addEventListener('change',e=>{const k=e.target.dataset.ch;if(!k)return;ui[k]=e.target.value;render()});
 render();
 if("serviceWorker" in navigator&&location.protocol.startsWith("http"))navigator.serviceWorker.register("sw.js").catch(()=>{});
+</script><script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/11.0.1/firebase-app.js";
+import { getFirestore, doc, setDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/11.0.1/firebase-firestore.js";
+
+const firebaseConfig = {
+  apiKey: "AIzaSyBnLzemvtYnWOfTuiLLONUEP0CT180WKRS",
+  authDomain: "midad-aljawhrah.firebaseapp.com",
+  projectId: "midad-aljawhrah",
+  storageBucket: "midad-aljawhrah.firebasestorage.app",
+  messagingSenderId: "65741102762",
+  appId: "1:65741102762:web:a71c28ede984d8ee0ffad3",
+  measurementId: "G-TBVVSF7YHE"
+};
+
+const app = initializeApp(firebaseConfig);
+const db = getFirestore(app);
+const storeRef = doc(db, "store", "main");
+
+window.cloudSave = async (data) => {
+  try {
+ await setDoc(storeRef, { json: JSON.stringify(data), updatedAt: Date.now() });
+} catch (e) {
+console.error("Cloud save error:", e);
+}
+};
+
+onSnapshot(storeRef, (snap) => {
+if (snap.exists() && snap.data().json) {
+try {
+const remote = JSON.parse(snap.data().json);
+if (JSON.stringify(remote) !== JSON.stringify(S)) {
+S = remote;
+localStorage.setItem('tsr_db', JSON.stringify(S));
+render();
+}
+} catch (e) {}
+}
+});
 </script></body></html>
