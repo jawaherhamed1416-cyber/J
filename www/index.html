@@ -538,8 +538,91 @@ inv(e){const s=S.sales.find(x=>String(x.id)===String(e.dataset.id));modal(`<div 
 <table><tr><th>الصنف</th><th>الكمية</th><th>السعر</th><th>الإجمالي</th></tr>${s.items.map(i=>`<tr><td>${esc(fmtItemName(i.name,i.opt))}</td><td>${i.q}</td><td>${f(i.price)}</td><td>${f(i.q*i.price)}</td></tr>`).join('')}</table>
 <p>المجموع: ${m(s.sub)}<br>الخصم: ${m(s.disc)}<br>الضريبة: ${m(s.tax)}<br><b>الإجمالي: ${m(s.total)}</b><br>الدفع: ${s.pay}</p><p style="text-align:center">شكراً لزيارتكم</p></div>
 <div class="row noprint"><button class="btn sp" data-a="prn">طباعة</button><button class="btn o sp" data-a="shr" data-id="${s.id}">مشاركة</button><button class="btn o" data-a="close">إغلاق</button></div>`)},
-prn(){document.body.classList.add('pi');print();setTimeout(()=>document.body.classList.remove('pi'),500)},
-async shr(e){const s=S.sales.find(x=>String(x.id)===String(e.dataset.id)),t=`${S.set.name}\nفاتورة ${s.no} — ${new Date(s.t).toLocaleDateString('ar-SA')}\n`+s.items.map(i=>`${fmtItemName(i.name,i.opt)} ×${i.q} = ${f(i.q*i.price)}`).join('\n')+`\nالخصم: ${f(s.disc)}\nالضريبة: ${f(s.tax)}\nالإجمالي: ${m(s.total)}`;try{if(navigator.share)await navigator.share({text:t});else{await navigator.clipboard.writeText(t);toast('تم نسخ الفاتورة')}}catch(x){}},
+makeInvoicePdfBlob(s){
+  if(!s)return null;
+  const escPdf=v=>String(v??'').replace(/[()\\]/g,c=>'\\'+c).replace(/[^\x20-\x7E]/g,'?');
+  const lines=[
+    `${escPdf(S.set.name)} - Invoice #${s.no}`,
+    `Date: ${escPdf(new Date(s.t).toLocaleString('en-US'))}`,
+    `Payment: ${escPdf(s.pay||'')}`,
+    '----------------------------------------'
+  ];
+  s.items.forEach(i=>{
+    const nm=fmtItemName(i.name,i.opt);
+    lines.push(`${escPdf(nm)} | ${i.q} x ${f(i.price)} = ${f(i.q*i.price)} SAR`);
+  });
+  lines.push('----------------------------------------');
+  lines.push(`Subtotal: ${f(s.sub)} SAR`);
+  lines.push(`Discount: ${f(s.disc)} SAR`);
+  lines.push(`Tax: ${f(s.tax)} SAR`);
+  lines.push(`TOTAL: ${f(s.total)} SAR`);
+  lines.push('Thank you for your business!');
+  const streamLines=lines.slice(0,36).map((ln,idx)=>`BT /F1 11 Tf 36 ${740-idx*18} Td (${ln}) Tj ET`);
+  const contentStream=streamLines.join('\n');
+  const objects=[
+    '1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj',
+    '2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj',
+    '3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >> endobj',
+    '4 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj',
+    `5 0 obj << /Length ${contentStream.length} >> stream\n${contentStream}\nendstream endobj`
+  ];
+  let pdf='%PDF-1.4\n';
+  const offsets=[0];
+  for(const obj of objects){
+    offsets.push(pdf.length);
+    pdf+=obj+'\n';
+  }
+  const xrefPos=pdf.length;
+  pdf+=`xref\n0 ${objects.length+1}\n0000000000 65535 f \n`;
+  for(let i=1;i<offsets.length;i++){
+    pdf+=String(offsets[i]).padStart(10,'0')+' 00000 n \n';
+  }
+  pdf+=`trailer << /Size ${objects.length+1} /Root 1 0 R >>\nstartxref\n${xrefPos}\n%%EOF`;
+  return new Blob([pdf],{type:'application/pdf'});
+},
+async exportInvoicePdf(saleId,mode){
+  const s=S.sales.find(x=>String(x.id)===String(saleId));
+  if(!s)return toast('تعذر العثور على الفاتورة','e');
+  const fileName=`invoice-${s.no}.pdf`;
+  const pdfBlob=A.makeInvoicePdfBlob(s);
+  if(mode==='print'){
+    try{
+      if(typeof window.print==='function'){
+        document.body.classList.add('pi');
+        window.print();
+        setTimeout(()=>document.body.classList.remove('pi'),500);
+        return;
+      }
+    }catch(e){document.body.classList.remove('pi');}
+  }
+  try{
+    if(pdfBlob&&typeof File!=='undefined'&&navigator.canShare){
+      const fObj=new File([pdfBlob],fileName,{type:'application/pdf'});
+      if(navigator.canShare({files:[fObj]})){
+        await navigator.share({title:`Invoice #${s.no}`,text:`Invoice #${s.no} - ${S.set.name}`,files:[fObj]});
+        toast('تم تجهيز ملف PDF للفاتورة');
+        return;
+      }
+    }
+  }catch(e){
+    if(e&&e.name==='AbortError')return;
+  }
+  if(pdfBlob){
+    try{
+      const url=URL.createObjectURL(pdfBlob);
+      const a=document.createElement('a');
+      a.href=url;a.download=fileName;a.target='_blank';a.rel='noopener';
+      document.body.appendChild(a);a.click();a.remove();
+      setTimeout(()=>URL.revokeObjectURL(url),2000);
+      toast('تم إنشاء ملف PDF للفاتورة');
+      return;
+    }catch(e){}
+  }
+  const txt=`${S.set.name}\nفاتورة ${s.no} — ${new Date(s.t).toLocaleDateString('ar-SA')}\n`+s.items.map(i=>`${fmtItemName(i.name,i.opt)} ×${i.q} = ${f(i.q*i.price)}`).join('\n')+`\nالإجمالي: ${m(s.total)}`;
+  try{await navigator.clipboard?.writeText(txt);toast('تم نسخ بيانات الفاتورة');}catch(e){toast('تعذر فتح المشاركة في هذا الجهاز','e');}
+},
+prn(){const b=$('#modal [data-a="shr"]');A.exportInvoicePdf(b?.dataset?.id||S.sales[S.sales.length-1]?.id,'print');},
+async shr(e){await A.exportInvoicePdf(e?.dataset?.id,'share');},
 mv(e){const p=P(e.dataset.id);const opts=prodOpts(p);const optBreakdown=hasOptStock(p)?`<div class="card" style="margin:8px 0">${opts.map(o=>`<div class="row" style="padding:4px 0;border-bottom:1px solid var(--line)"><span class="sp">${esc(o)}</span><span class="badge ${(+p.optQty[o]||0)<=0?'low':''}">${(+p.optQty[o]||0)>0?(+p.optQty[o])+' متوفر':'نفدت الكمية'}</span></div>`).join('')}</div>`:'';modal(`<h3>${esc(p.name)}</h3><p>إجمالي الكمية: <b>${p.qty}</b> — الحد الأدنى ${p.min}</p>${optBreakdown}
 <div class="grid"><button class="btn" data-a="mvf" data-t="in" data-id="${p.id}">إدخال</button><button class="btn o" data-a="mvf" data-t="out" data-id="${p.id}">إخراج</button><button class="btn g" style="grid-column:span 2" data-a="mvf" data-t="adj" data-id="${p.id}">تعديل بجرد فعلي</button></div>
 <h3 style="margin-top:12px">سجل الحركة</h3>${movLog(S.moves.filter(x=>String(x.pid)===String(p.id)))}<button class="btn o" style="width:100%;margin-top:10px" data-a="close">إغلاق</button>`)},
@@ -576,9 +659,32 @@ pok(){if(!ui.pl.length)return toast('أضف صنفاً واحداً على ال�
 S.purchases.push({id:uid(),t:Date.now(),sid,items:ui.pl.map(l=>({id:l.id,name:P(l.id).name,q:l.q,cost:l.cost})),total:ui.pl.reduce((a,l)=>a+l.q*l.cost,0)});
 ui.pl.forEach(l=>{const p=P(l.id);p.qty+=l.q;p.cost=l.cost;move(p.id,'in',l.q,'مشتريات')});save();close();render();toast('تم اعتماد الفاتورة وتحديث المخزون')},
 rng(e){ui.range=e.dataset.r;render()},
-pdf(){print()},
-xls(){const d=repData(),r=[['رقم','التاريخ','الإجمالي','الخصم','الضريبة','الدفع'],...d.sl.map(s=>[s.no,dk(s.t),s.total.toFixed(2),s.disc.toFixed(2),s.tax.toFixed(2),s.pay]),[],['الصنف','الكمية المباعة'],...d.top.map(x=>[x.n,x.q]),[],['المخزون'],['المنتج','الكمية','سعر الشراء'],...S.products.map(p=>[p.name,p.qty,p.cost])];
-dl('\ufeff'+r.map(x=>x.map(c=>'"'+String(c).replace(/"/g,'""')+'"').join(',')).join('\n'),`تقرير-${d.a}-${d.b}.csv`,'text/csv')},
+pdf(){
+  try{
+    if(typeof window.print==='function'){window.print();return;}
+  }catch(e){}
+  const d=repData();
+  const txt=`تقرير ${S.set.name}\nالفترة: ${d.a} إلى ${d.b}\nالمبيعات: ${m(d.sales)}\nصافي الربح: ${m(d.profit)}\nالمشتريات: ${m(d.buys)}\nقيمة المخزون: ${m(stockVal())}`;
+  modal(`<h3>تقرير ${esc(S.set.name)}</h3><p style="color:var(--mut)">الفترة: ${d.a} إلى ${d.b}</p><div class="card"><p>المبيعات (${d.sl.length} فاتورة): <b>${m(d.sales)}</b><br>صافي الربح: <b>${m(d.profit)}</b><br>المشتريات: <b>${m(d.buys)}</b><br>قيمة المخزون: <b>${m(stockVal())}</b></p></div><div class="row" style="margin-top:12px"><button class="btn g sp" id="copyRepTxt">نسخ التقرير</button><button class="btn o" data-a="close">إغلاق</button></div>`);
+  const b=$('#copyRepTxt');if(b)b.onclick=()=>{navigator.clipboard?.writeText(txt).catch(()=>{});toast('تم نسخ التقرير');};
+},
+xls(){
+  const d=repData();
+  const r=[['رقم','التاريخ','الإجمالي','الخصم','الضريبة','الدفع'],...d.sl.map(s=>[s.no,dk(s.t),s.total.toFixed(2),s.disc.toFixed(2),s.tax.toFixed(2),s.pay]),[],['الصنف','الكمية المباعة'],...d.top.map(x=>[x.n,x.q]),[],['المخزون'],['المنتج','الكمية','سعر الشراء'],...S.products.map(p=>[p.name,p.qty,p.cost])];
+  const csv='\ufeff'+r.map(x=>x.map(c=>'"'+String(c).replace(/"/g,'""')+'"').join(',')).join('\n');
+  const fname=`report-${d.a}-${d.b}.csv`;
+  try{
+    const blob=new Blob([csv],{type:'text/csv;charset=utf-8;'});
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement('a');a.href=url;a.download=fname;a.rel='noopener';
+    document.body.appendChild(a);a.click();a.remove();
+    setTimeout(()=>URL.revokeObjectURL(url),1500);
+    toast('تم تجهيز ملف التقرير');
+  }catch(e){
+    if(navigator.clipboard?.writeText){navigator.clipboard.writeText(csv).catch(()=>{});toast('تم نسخ بيانات التقرير');}
+    else toast('تعذر التنزيل في بيئة التطبيق الحالية','e');
+  }
+},
 slogo(){pickImg(d=>{S.set.logo=d;save();render()})},rlogo(){S.set.logo=null;save();render()},
 ssave(){const lay=$('#s_layout')?.value||getShopLayout();const alay=$('#s_adm_layout')?.value||getAdminLayout();Object.assign(S.set,{name:$('#s_name').value.trim()||'مداد الجوهرة',phone:$('#s_phone').value.trim()||WA_PHONE,vat:$('#s_vat').value,tax:+$('#s_tax').value||0,shopLayout:lay,adminProdLayout:alay});save();render();toast('تم حفظ الإعدادات')},
 async chpw(){const n=$('#p_new').value;if(me.pass!==await hash($('#p_old').value))return toast('كلمة المرور الحالية غير صحيحة','e');if(n.length<4)return toast('كلمة المرور قصيرة','e');me.pass=await hash(n);save();$('#p_old').value=$('#p_new').value='';toast('تم تغيير كلمة المرور')},
